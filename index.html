@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GeoTycoon — análise de localização em jogo</title>
+<style>
+  :root {
+    --bg:#0f1220; --panel:#151935; --ink:#e7e9f7; --muted:#a9add6; --accent:#7dd3fc; --good:#22c55e; --bad:#ef4444;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  #app{display:grid;grid-template-columns:320px 1fr;grid-template-rows:auto 1fr auto;gap:8px;height:100%;padding:8px}
+  header,footer{grid-column:1 / -1;background:var(--panel);border-radius:14px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between}
+  header h1{margin:0;font-size:18px;letter-spacing:0.3px}
+  header .small{font-size:12px;color:var(--muted)}
+  .panel{background:var(--panel);border-radius:14px;padding:12px;box-shadow:0 1px 0 rgba(255,255,255,0.04) inset}
+  #left{display:flex;flex-direction:column;gap:12px;overflow:auto}
+  #mapWrap{position:relative}
+  canvas{image-rendering:pixelated;background:#0b0f24;border-radius:12px;display:block}
+  #hud{position:absolute;left:10px;top:10px;background:rgba(10,13,30,0.7);backdrop-filter:blur(6px);padding:8px 10px;border-radius:10px;font-size:12px;color:var(--muted)}
+  #hud strong{color:var(--ink)}
+  .row{display:flex;gap:8px;align-items:center}
+  .row > *{flex:1}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+  input[type="range"]{width:100%}
+  select, input[type="number"], input[type="text"], button{background:#0e1330;color:var(--ink);border:1px solid #283057;border-radius:10px;padding:8px 10px;font-size:13px}
+  button{cursor:pointer;transition:transform .06s ease}
+  button:hover{transform:translateY(-1px)}
+  .accent{border-color:#1f3b6b}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .weights{display:grid;grid-template-columns:1fr;gap:8px}
+  .weight{background:#0e1330;border:1px dashed #2a3769;border-radius:10px;padding:8px}
+  .inline{display:flex;gap:8px;align-items:center}
+  .pill{font-size:11px;padding:4px 8px;border:1px solid #2b3564;border-radius:999px;color:var(--muted)}
+  .legend{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--muted)}
+  .swatch{width:16px;height:8px;border-radius:3px}
+  .good{color:var(--good)}
+  .bad{color:var(--bad)}
+  #events{max-height:160px;overflow:auto;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:6px}
+  #chart{background:#0b0f24;border-radius:12px}
+  a.link{color:var(--accent);text-decoration:none}
+  #help{position:fixed;inset:0;display:none;place-items:center;background:rgba(5,7,20,0.6);backdrop-filter:blur(4px)}
+  #help .card{max-width:820px;background:var(--panel);border-radius:16px;padding:18px}
+  #help p{color:var(--muted);line-height:1.5}
+  #notif{position:fixed;right:12px;bottom:12px;background:#0b102a;border:1px solid #26315c;border-radius:12px;padding:10px 12px;color:var(--ink);font-size:13px;display:none}
+  .kbd{background:#0b102a;border:1px solid #24305a;border-radius:6px;padding:0 6px;font-size:11px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>GeoTycoon</h1>
+    <div class="small">simulação de escolha de ponto com mapa tático</div>
+  </header>
+
+  <div id="left" class="panel">
+    <div>
+      <label>novo cenário</label>
+      <div class="grid">
+        <input id="seed" class="accent" type="text" value="br-101" />
+        <select id="preset" class="accent">
+          <option value="urbano">urbano denso</option>
+          <option value="suburbano">suburbano</option>
+          <option value="costeiro">costeiro</option>
+          <option value="misto" selected>misto</option>
+          <option value="interior">interior</option>
+        </select>
+      </div>
+      <div class="grid" style="margin-top:8px">
+        <select id="tamanho">
+          <option value="28x20">28 x 20</option>
+          <option value="36x24" selected>36 x 24</option>
+          <option value="48x32">48 x 32</option>
+        </select>
+        <button id="btnNovo">gerar mapa</button>
+      </div>
+    </div>
+
+    <div>
+      <label>camada ativa</label>
+      <div class="grid">
+        <select id="overlay">
+          <option value="score">pontuação</option>
+          <option value="lucro">lucro estimado</option>
+          <option value="pop">população</option>
+          <option value="renda">renda</option>
+          <option value="trafego">tráfego</option>
+          <option value="transporte">transporte</option>
+          <option value="concorrencia">concorrência</option>
+          <option value="aluguel">aluguel</option>
+          <option value="terreno">custo do terreno</option>
+          <option value="crime">crime</option>
+          <option value="elevacao">elevação</option>
+          <option value="zona">zonas</option>
+        </select>
+        <button id="btnAjuda">como jogar</button>
+      </div>
+      <div class="legend" style="margin-top:8px">
+        <div class="swatch" style="background:#2b6cb0"></div><span>baixo</span>
+        <div class="swatch" style="background:#68d391"></div><span>médio</span>
+        <div class="swatch" style="background:#f59e0b"></div><span>alto</span>
+        <div class="swatch" style="background:#ef4444"></div><span>muito alto</span>
+      </div>
+    </div>
+
+    <div>
+      <label>pesos da pontuação</label>
+      <div class="weights" id="weights"></div>
+      <div class="inline">
+        <select id="perfil">
+          <option value="varejo">varejo</option>
+          <option value="servicos" selected>serviços</option>
+          <option value="escritorio">escritório</option>
+          <option value="deposito">depósito</option>
+          <option value="custom">customizado</option>
+        </select>
+        <button id="btnReset">zerar pesos</button>
+      </div>
+    </div>
+
+    <div>
+      <label>ações</label>
+      <div class="grid">
+        <button id="btnConstruir" class="good">construir unidade</button>
+        <button id="btnRemover" class="bad">remover</button>
+      </div>
+      <div class="grid" style="margin-top:8px">
+        <button id="btnSalvar">salvar</button>
+        <button id="btnCarregar">carregar</button>
+      </div>
+      <div class="grid" style="margin-top:8px">
+        <button id="btnTestes">rodar testes</button>
+      </div>
+    </div>
+
+    <div>
+      <label>eventos</label>
+      <div id="events"></div>
+    </div>
+
+  </div>
+
+  <div id="mapWrap" class="panel">
+    <canvas id="map" width="1152" height="768"></canvas>
+    <div id="hud">posição <strong id="pos">-</strong> zona <strong id="hzona">-</strong> score <strong id="hscore">-</strong> lucro/mês <strong id="hlucro">-</strong></div>
+  </div>
+
+  <footer>
+    <div>
+      caixa <span class="pill" id="cash">$ 0</span> receita/mês <span class="pill" id="rev">$ 0</span> despesa/mês <span class="pill" id="opex">$ 0</span> lucro/mês <span class="pill" id="profit">$ 0</span> payback <span class="pill" id="payback">-</span>
+    </div>
+    <div>
+      <canvas id="chart" width="360" height="64"></canvas>
+    </div>
+  </footer>
+</div>
+
+<div id="help">
+  <div class="card">
+    <h2 style="margin:0 0 8px 0">como jogar</h2>
+    <p>gere um mapa, ajuste pesos, selecione um tile e construa. segure <span class="kbd">shift</span> para mostrar raio de influência. clique com botão direito para remover. troque a camada para ver calor por variável. salve e carregue no navegador. pressione <span class="kbd">H</span> para abrir e fechar esta janela.</p>
+    <p>pontuação aplica os pesos sobre fatores do tile. lucro usa uma fórmula simples com população renda tráfego transporte e concorrência, desconta aluguel e crime, ajusta por zona. payback usa capex dividido por lucro mensal projetado. eventos mudam valores ao longo do tempo.</p>
+    <div style="text-align:right;margin-top:10px"><button id="btnFecharHelp">fechar</button></div>
+  </div>
+</div>
+<div id="notif"></div>
+
+<script>
+// ===== util =====
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function fmtMoney(n){return "$ " + Math.round(n).toLocaleString('pt-BR');}
+function lerp(a,b,t){return a+(b-a)*t}
+function hash32(x){x|=0;x=(x+0x7ed55d16)+(x<<12);x=(x^0xc761c23c)^(x>>>19);x=(x+0x165667b1)+(x<<5);x=(x+0xd3a2646c)^(x<<9);x=(x+0xfd7046c5)+(x<<3);x=(x^0xb55a4f09)^(x>>>16);return x>>>0}
+function mulberry32(seed){let t = seed>>>0;return function(){t += 0x6D2B79F5;let r = Math.imul(t ^ (t >>> 15), 1 | t);r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);return ((r ^ (r >>> 14)) >>> 0) / 4294967296}}
+function makeSeed(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+function noise2D(x,y,scale,seed){const s=scale;const xi=Math.floor(x/s), yi=Math.floor(y/s);const xf=(x/s)-xi, yf=(y/s)-yi;
+  const h=(i,j)=>{const k=hash32(seed ^ hash32(i*374761393 + j*668265263));return (k%10000)/10000}
+  const v00=h(xi,yi), v10=h(xi+1,yi), v01=h(xi,yi+1), v11=h(xi+1,yi+1);
+  const ux=xf*xf*(3-2*xf), uy=yf*yf*(3-2*yf);
+  return lerp(lerp(v00,v10,ux), lerp(v01,v11,ux), uy)
+}
+function heat(v){ // 0..1 -> color
+  const c = v;
+  const r = c<0.5? lerp(0, 244, c*2): 244;
+  const g = c<0.5? lerp(64, 211, c*2): lerp(211, 98, (c-0.5)*2);
+  const b = c<0.5? lerp(176, 59, c*2): lerp(59, 68, (c-0.5)*2);
+  return `rgb(${r|0},${g|0},${b|0})`;
+}
+function show(msg){const n=document.getElementById('notif');n.textContent=msg;n.style.display='block';clearTimeout(show.t);show.t=setTimeout(()=>n.style.display='none',2200)}
+
+// ===== core state =====
+const State={
+  W:36,H:24,tile:24, rng:mulberry32(1), seed:1, tick:0,
+  tiles:[], units:[], cash:300000, baseCapex:120000, baseOpex:12000, baseRev:20000,
+  profile:'servicos', overlay:'score',
+  weights: {
+    pop:0.22, renda:0.18, trafego:0.20, transporte:0.12, concorrencia:-0.10, aluguel:-0.06, terreno:-0.06, crime:-0.10
+  },
+  events:[], history:[]
+};
+
+// ===== helpers =====
+function tileSafe(x,y){const idx=x+y*State.W; return State.tiles && State.tiles[idx] ? State.tiles[idx] : null}
+
+// ===== map generation =====
+function genMap(preset='misto'){
+  const [W,H] = [State.W, State.H];
+  const seedStr = document.getElementById('seed').value + '-' + preset + '-' + W+'x'+H;
+  const seed = makeSeed(seedStr); State.seed=seed; State.rng=mulberry32(seed);
+  State.tiles = new Array(W*H);
+  // precompute corredores
+  const roads=[], rails=[];
+  const nRoads=3+ (seed%3);
+  for(let i=0;i<nRoads;i++){
+    const y = Math.floor(lerp(2,H-3, noise2D(i*71, i*19, 1, seed^0xABC)));
+    roads.push({a:[0,y], b:[W-1, clamp(y+((i%2)?1:-1),1,H-2)]});
+  }
+  const nRails=2+ ((seed>>3)%2);
+  for(let i=0;i<nRails;i++){
+    const x = Math.floor(lerp(2,W-3, noise2D(i*33, i*47, 1, seed^0xC0FE)));
+    rails.push({a:[x,0], b:[clamp(x+((i%2)?1:-1),1,W-2), H-1]});
+  }
+  function distToSegments(x,y, segs){
+    let d=1e9;for(const s of segs){const [x1,y1]=s.a,[x2,y2]=s.b;const A=x-x1,B=y-y1,C=x2-x1,D=y2-y1;const dot=A*C+B*D,len=C*C+D*D;let t= len? dot/len:0;t=clamp(t,0,1);const xx=x1+t*C, yy=y1+t*D;const dx=x-xx, dy=y-yy; d=Math.min(d, Math.hypot(dx,dy));}
+    return d;
+  }
+  // gerar camadas base
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+    const e = noise2D(x,y, 18, seed^0xE1) * 0.6 + noise2D(x,y, 6, seed^0xE2)*0.4;
+    const nearWater = e<0.28 || (preset==='costeiro'&& y>H*0.75);
+    const pop = clamp(100*(noise2D(x+20,y+10, 10, seed^0xA1)*0.6 + noise2D(x,y, 4, seed^0xA2)*0.4 + (preset==='urbano'?0.15:0)),0,100);
+    const renda = clamp(100*(noise2D(x,y, 9, seed^0xB1)*0.7 + noise2D(x+5,y+5, 3, seed^0xB2)*0.3 + (preset==='escritorio'?0.1:0)),0,100);
+    const traf = clamp(100*(noise2D(x*1.1,y*0.9, 7, seed^0xC1)*0.6 + noise2D(x,y, 3, seed^0xC2)*0.4),0,100);
+    const distRoad = distToSegments(x,y, roads);
+    const distRail = distToSegments(x,y, rails);
+    const transporte = clamp(100*(1/(1+0.6*distRail)) + 40*(1/(1+0.8*distRoad)), 0, 100);
+    const concorrencia = clamp(100*(noise2D(x+9,y-3, 8, seed^0xD1)*0.7 + noise2D(x,y, 2, seed^0xD2)*0.3),0,100);
+    const crime = clamp(100*(noise2D(x-7,y+11, 10, seed^0xF1)*0.6 + noise2D(x,y, 3, seed^0xF2)*0.4),0,100);
+    const aluguel = clamp(30 + renda*0.45 + traf*0.15 - crime*0.25 + (nearWater?10:0), 0, 100);
+    const terreno = clamp(20 + e*90 + (nearWater?15:0) + (preset==='interior'?-10:0),0,100);
+    let zona='Residencial';
+    const centerWeight = 1 - (Math.hypot(x-W/2, y-H/2) / Math.hypot(W/2, H/2));
+    const zonePick = noise2D(x-13,y+17, 5, seed^0x99)+ centerWeight*0.5;
+    if(nearWater){zona = 'Verde'}
+    else if(zonePick>0.78){zona='Industrial'}
+    else if(zonePick>0.62){zona='Comercial'}
+    else if(zonePick>0.5){zona='Mista'}
+    if(preset==='urbano' && zona==='Residencial' && centerWeight>0.5) zona='Mista';
+    State.tiles[x+y*W]={x,y,elev:e,water:nearWater, pop, renda, trafego:traf, transporte, concorrencia, crime, aluguel, terreno, zona, built:null};
+  }
+  State.units=[]; State.cash=320000; State.tick=0; State.events=[{t:0,msg:'mapa criado'}]; State.history=[0];
+}
+
+// ===== scoring and economics =====
+function tileScore(t){if(!t) return 0; const w=State.weights;
+  const pos = w.pop*t.pop + w.renda*t.renda + w.trafego*t.trafego + w.transporte*t.transporte;
+  const neg = (-w.concorrencia)*t.concorrencia + (-w.aluguel)*t.aluguel + (-w.terreno)*t.terreno + (-w.crime)*t.crime;
+  const sumW = Math.abs(w.pop)+Math.abs(w.renda)+Math.abs(w.trafego)+Math.abs(w.transporte)+Math.abs(w.concorrencia)+Math.abs(w.aluguel)+Math.abs(w.terreno)+Math.abs(w.crime);
+  if(sumW===0) return 0;
+  return clamp((pos - neg)/sumW, 0, 100);
+}
+function tileMonthly(t){if(!t) return {rev:0,opex:0,lucro:0,capex:Infinity};
+  const zoneBoost = (t.zona==='Comercial'||t.zona==='Mista')?1.1 : (t.zona==='Industrial'?0.8:1.0);
+  const rev = State.baseRev * zoneBoost * Math.pow(t.pop/100,0.6) * Math.pow((t.renda+40)/140,0.5) * Math.pow((t.trafego+20)/120,0.7) * (0.8 + 0.35*(t.transporte/100)) * (1 - 0.45*(t.concorrencia/100));
+  const opex = State.baseOpex * (0.4 + 0.6*(t.aluguel/100)) + 180 * (t.crime/100);
+  const risk = 1 + 0.25*(t.crime/100) + (t.water && t.elev<0.32?0.15:0);
+  const capex = State.baseCapex * (0.5 + 0.7*(t.terreno/100)) * risk * (t.zona==='Industrial'&&State.profile==='varejo'?1.2:1.0);
+  const lucro = Math.max(0, rev - opex);
+  return {rev, opex, lucro, capex};
+}
+function portfolioKPI(){let rev=0, opex=0, capex=0; for(const u of State.units){const m=tileMonthly(u.t);rev+=m.rev; opex+=m.opex; capex+=m.capex}
+  const lucro = Math.max(0, rev-opex); const payback = lucro>0? capex/lucro : Infinity; return {rev,opex,lucro,capex,payback}
+}
+
+// ===== rendering =====
+const map = document.getElementById('map'); const ctx = map.getContext('2d');
+function draw(){const W=State.W,H=State.H,S=State.tile; ctx.clearRect(0,0,map.width,map.height);
+  // base
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+    const t = tileSafe(x,y); if(!t) continue;
+    let base;
+    if(State.overlay==='zona'){
+      if(t.zona==='Residencial') base='#1f2a4d';
+      else if(t.zona==='Comercial') base='#234f6b';
+      else if(t.zona==='Industrial') base='#3b3b4f';
+      else if(t.zona==='Mista') base='#2a3a68';
+      else base='#143e3a';
+    } else {
+      base = '#0a0f2a';
+    }
+    ctx.fillStyle = base; ctx.fillRect(x*S,y*S,S-1,S-1);
+  }
+  // overlay heat
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+    const t=tileSafe(x,y); if(!t) continue; let v=0;
+    const m = tileMonthly(t);
+    switch(State.overlay){
+      case 'score': v = tileScore(t)/100; break;
+      case 'lucro': v = clamp(m.lucro/40000,0,1); break;
+      case 'pop': v=t.pop/100; break; case 'renda': v=t.renda/100; break; case 'trafego': v=t.trafego/100; break; case 'transporte': v=t.transporte/100; break; case 'concorrencia': v=t.concorrencia/100; break; case 'aluguel': v=t.aluguel/100; break; case 'terreno': v=t.terreno/100; break; case 'crime': v=t.crime/100; break; case 'elevacao': v=t.elev; break; default: v=0; }
+    if(State.overlay!=='zona'){ctx.fillStyle = heat(v); ctx.globalAlpha=0.9; ctx.fillRect(x*S,y*S,S-1,S-1); ctx.globalAlpha=1}
+  }
+  // units
+  for(const u of State.units){const {x,y}=u.t; ctx.fillStyle='#f8fafc'; ctx.fillRect(x*S+4, y*S+4, S-8, S-8); ctx.fillStyle='#0b102a'; ctx.fillRect(x*S+6, y*S+6, S-12, S-12)}
+}
+
+// ===== interactions =====
+let hover={x:-1,y:-1}; let buildMode=false; let removeMode=false; let influence=false;
+map.addEventListener('mousemove', e=>{const r=map.getBoundingClientRect(); const x=Math.floor((e.clientX-r.left)/State.tile); const y=Math.floor((e.clientY-r.top)/State.tile); hover={x,y}; updateHUD()});
+map.addEventListener('mouseleave',()=>{hover={x:-1,y:-1}; updateHUD()});
+map.addEventListener('contextmenu', e=>{e.preventDefault(); if(hover.x>=0) doRemove()});
+map.addEventListener('click', e=>{if(buildMode) doBuild(); else if(removeMode) doRemove()});
+window.addEventListener('keydown', e=>{if(e.key==='Shift') {influence=true; drawInfluence()} if(e.key.toLowerCase()==='h'){toggleHelp()}});
+window.addEventListener('keyup', e=>{if(e.key==='Shift') {influence=false; draw()}});
+
+function updateHUD(){const pos=document.getElementById('pos'), z=document.getElementById('hzona'), s=document.getElementById('hscore'), l=document.getElementById('hlucro');
+  const out=()=>{pos.textContent='-'; z.textContent='-'; s.textContent='-'; l.textContent='-'};
+  if(hover.x<0||hover.x>=State.W||hover.y<0||hover.y>=State.H){out(); draw(); return}
+  const t=tileSafe(hover.x,hover.y); if(!t){out(); draw(); return}
+  pos.textContent=`${hover.x},${hover.y}`; z.textContent=t.zona||'-'; s.textContent=(tileScore(t)|0);
+  const m=tileMonthly(t); l.textContent=fmtMoney(m.lucro);
+  draw(); if(influence) drawInfluence();
+}
+function drawInfluence(){const {x,y}=hover; if(x<0) return; const S=State.tile; const rad=4; ctx.save(); ctx.globalAlpha=0.25; ctx.fillStyle='#ffffff'; ctx.beginPath(); ctx.arc(x*S+S/2, y*S+S/2, (rad+0.5)*S, 0, Math.PI*2); ctx.fill(); ctx.restore();}
+
+function doBuild(){const {x,y}=hover; if(x<0) return; const t=tileSafe(x,y); if(!t){show('tile inválido'); return} if(t.built){show('já existe unidade aqui'); return}
+  const m=tileMonthly(t); if(State.cash < m.capex){show('caixa insuficiente'); return}
+  State.cash -= m.capex; t.built={t}; State.units.push({t}); State.events.unshift({t:State.tick,msg:`unidade construída em ${x},${y}`}); draw(); refreshKPI();}
+function doRemove(){const {x,y}=hover; if(x<0) return; const t=tileSafe(x,y); if(!t){show('tile inválido'); return} if(!t.built){show('nada para remover'); return} t.built=null; State.units = State.units.filter(u=>!(u.t.x===x&&u.t.y===y)); State.events.unshift({t:State.tick,msg:`unidade removida em ${x},${y}`}); draw(); refreshKPI();}
+
+// ===== UI wiring =====
+function mountWeights(){const box=document.getElementById('weights'); box.innerHTML=''; const defs=[
+  ['pop','população'],['renda','renda'],['trafego','tráfego'],['transporte','transporte'],['concorrencia','concorrência'],['aluguel','aluguel'],['terreno','custo do terreno'],['crime','crime']
+];
+  for(const [k,label] of defs){const w=document.createElement('div'); w.className='weight'; w.innerHTML=`<div class="inline"><div style="flex:1">${label}</div><div class="pill" id="pv_${k}">${(State.weights[k]*100|0)}</div></div><input id="w_${k}" type="range" min="-50" max="50" value="${State.weights[k]*100|0}">`;
+    box.appendChild(w); const r=w.querySelector('input'); r.addEventListener('input',()=>{State.weights[k]=r.value/100; w.querySelector('#pv_'+k).textContent=(r.value|0); draw(); updateHUD()});
+  }
+}
+function applyProfile(name){State.profile=name; const w=State.weights; if(name==='varejo'){w.pop=0.25;w.renda=0.18;w.trafego=0.28;w.transporte=0.14;w.concorrencia=-0.18;w.aluguel=-0.08;w.terreno=-0.04;w.crime=-0.07}
+  else if(name==='servicos'){w.pop=0.22;w.renda=0.2;w.trafego=0.18;w.transporte=0.12;w.concorrencia=-0.12;w.aluguel=-0.06;w.terreno=-0.05;w.crime=-0.09}
+  else if(name==='escritorio'){w.pop=0.12;w.renda=0.28;w.trafego=0.1;w.transporte=0.18;w.concorrencia=-0.08;w.aluguel=-0.12;w.terreno=-0.06;w.crime=-0.08}
+  else if(name==='deposito'){w.pop=0.06;w.renda=0.08;w.trafego=0.18;w.transporte=0.24;w.concorrencia=-0.06;w.aluguel=-0.04;w.terreno=-0.22;w.crime=-0.06}
+  mountWeights(); draw(); updateHUD(); show('perfil aplicado')}
+
+function refreshKPI(){const k=portfolioKPI(); document.getElementById('cash').textContent=fmtMoney(State.cash); document.getElementById('rev').textContent=fmtMoney(k.rev); document.getElementById('opex').textContent=fmtMoney(k.opex); document.getElementById('profit').textContent=fmtMoney(k.lucro); document.getElementById('payback').textContent= (k.payback===Infinity?'-': (k.payback.toFixed(1)+' meses'));
+  State.history.push(k.lucro); if(State.history.length>100) State.history.shift(); drawChart();}
+
+function drawChart(){const c=document.getElementById('chart'); const g=c.getContext('2d'); g.clearRect(0,0,c.width,c.height); g.strokeStyle='#7dd3fc'; g.beginPath(); const arr=State.history; const max=Math.max(1, ...arr); for(let i=0;i<arr.length;i++){const x=i/(arr.length-1)*c.width; const y=c.height - (arr[i]/max)*c.height; if(i===0) g.moveTo(x,y); else g.lineTo(x,y)} g.stroke();}
+
+function bindUI(){document.getElementById('overlay').addEventListener('change', e=>{State.overlay=e.target.value; draw(); updateHUD()});
+  document.getElementById('btnConstruir').addEventListener('click',()=>{buildMode=true; removeMode=false; show('clique no mapa para construir')});
+  document.getElementById('btnRemover').addEventListener('click',()=>{removeMode=true; buildMode=false; show('clique no mapa para remover')});
+  document.getElementById('btnReset').addEventListener('click',()=>{State.weights={pop:0, renda:0, trafego:0, transporte:0, concorrencia:0, aluguel:0, terreno:0, crime:0}; mountWeights(); draw(); updateHUD()});
+  document.getElementById('perfil').addEventListener('change', e=>applyProfile(e.target.value));
+  document.getElementById('preset').addEventListener('change', ()=>{genMap(document.getElementById('preset').value); draw(); updateHUD(); refreshKPI()});
+  document.getElementById('tamanho').addEventListener('change', e=>{const [w,h]=e.target.value.split('x').map(Number); State.W=w; State.H=h; resizeCanvas(); genMap(document.getElementById('preset').value); draw(); updateHUD(); refreshKPI()});
+  document.getElementById('btnNovo').addEventListener('click',()=>{genMap(document.getElementById('preset').value); resizeCanvas(); draw(); updateHUD(); refreshKPI()});
+  document.getElementById('btnSalvar').addEventListener('click',()=>{localStorage.setItem('geotycoon_save', JSON.stringify({
+    seed:State.seed,W:State.W,H:State.H,cash:State.cash,profile:State.profile,weights:State.weights,tiles:State.tiles.map(t=>({x:t.x,y:t.y,elev:t.elev,water:t.water,pop:t.pop,renda:t.renda,trafego:t.trafego,transporte:t.transporte,concorrencia:t.concorrencia,crime:t.crime,aluguel:t.aluguel,terreno:t.terreno,zona:t.zona,built:!!t.built}))})) ; show('salvo no navegador')});
+  document.getElementById('btnCarregar').addEventListener('click',()=>{const raw=localStorage.getItem('geotycoon_save'); if(!raw){show('nenhum save'); return} const data=JSON.parse(raw); State.W=data.W; State.H=data.H; State.cash=data.cash; State.profile=data.profile; State.weights=data.weights; resizeCanvas(); genMap('misto');
+    for(const d of data.tiles){const t=tileSafe(d.x,d.y); if(!t) continue; Object.assign(t,d); if(d.built) {t.built={t}; State.units.push({t})}}
+    draw(); mountWeights(); refreshKPI(); show('save carregado')});
+  document.getElementById('btnAjuda').addEventListener('click', toggleHelp);
+  document.getElementById('btnFecharHelp').addEventListener('click', toggleHelp);
+  document.getElementById('btnTestes').addEventListener('click', runTests);
+}
+function toggleHelp(){const el=document.getElementById('help'); el.style.display = el.style.display==='grid'? 'none':'grid'}
+
+// ===== time and events =====
+function step(){State.tick++;
+  if(State.tick%8===0){
+    let tries=0; while(tries<5){const i=(State.rng()*State.tiles.length)|0; const t=State.tiles[i]; if(t){t.concorrencia=clamp(t.concorrencia+15,0,100); State.events.unshift({t:State.tick, msg:`concorrente abriu próximo de ${t.x},${t.y}`}); break} tries++}
+  }
+  if(State.tick%12===0){
+    let tries=0; while(tries<5){const i=(State.rng()*State.tiles.length)|0; const t=State.tiles[i]; if(t){t.transporte=clamp(t.transporte+20,0,100); State.events.unshift({t:State.tick, msg:`nova linha melhorou transporte em ${t.x},${t.y}`}); break} tries++}
+  }
+  if(State.tick%10===0){ for(let k=0;k<State.tiles.length;k++){const t=State.tiles[k]; if(!t) continue; t.crime=clamp(t.crime + (State.rng()*10-5),0,100)} }
+  const k=portfolioKPI(); State.cash += k.lucro; refreshKPI(); draw(); updateHUD(); renderEvents();}
+
+function renderEvents(){const box=document.getElementById('events'); box.innerHTML=''; for(const e of State.events.slice(0,20)){const div=document.createElement('div'); div.textContent=`mês ${e.t} ${e.msg}`; box.appendChild(div)}}
+
+// ===== testes =====
+function runTests(){const results=[]; const pass=(name)=>results.push({name,ok:true}); const fail=(name,err)=>results.push({name,ok:false,err});
+  try{genMap('misto'); pass('gera mapa sem falhar')}catch(err){fail('gera mapa sem falhar',err)}
+  try{if(State.tiles.length!==State.W*State.H) throw new Error('tamanho incorreto'); const bad=State.tiles.find(t=>!t||!('zona'in t)); if(bad) throw new Error('tile sem zona'); pass('tiles bem formados')}catch(err){fail('tiles bem formados',err)}
+  try{draw(); pass('draw executa')}catch(err){fail('draw executa',err)}
+  try{hover={x:-1,y:-1}; updateHUD(); pass('hud fora do mapa')}catch(err){fail('hud fora do mapa',err)}
+  try{const t=tileSafe(0,0); const m=tileMonthly(t); ['rev','opex','lucro','capex'].forEach(k=>{if(typeof m[k]!=='number'&&m[k]!==Infinity) throw new Error('métricas inválidas')}); pass('economia válida')}catch(err){fail('economia válida',err)}
+  try{step(); pass('tick executa')}catch(err){fail('tick executa',err)}
+  const ok=results.filter(r=>r.ok).length; const bad=results.length-ok; console.group('GeoTycoon testes'); results.forEach(r=>{if(r.ok) console.log('✓', r.name); else console.error('✗', r.name, r.err)}); console.groupEnd();
+  State.events.unshift({t:State.tick, msg:`testes: ${ok} ok, ${bad} falhas`}); renderEvents(); show(`testes: ${ok} ok, ${bad} falhas`);
+}
+
+// ===== boot =====
+function resizeCanvas(){map.width = State.W*State.tile; map.height= State.H*State.tile}
+function boot(){resizeCanvas(); genMap('misto'); mountWeights(); bindUI(); applyProfile('servicos'); draw(); updateHUD(); refreshKPI(); setInterval(step, 1000); runTests()}
+boot();
+</script>
+</body>
+</html>
